@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatISO } from "date-fns";
 import * as XLSX from "xlsx";
@@ -46,26 +46,43 @@ function WarehouseModal(props: {
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (props.open) setHint(null);
+  }, [props.open]);
+
   if (!props.open) return null;
 
   async function addWh() {
-    if (!name.trim()) return;
-    setBusy(true);
-    const supabase = createClient();
-    const { error } = await supabase.from("warehouses").insert({
-      warehouse_name: name.trim(),
-      is_active: true,
-      api_config: {},
-    });
-    setBusy(false);
-    if (error) {
-      alert(error.message);
+    setHint(null);
+    if (!name.trim()) {
+      setHint("请先输入仓库名称。");
       return;
     }
-    setName("");
-    await qc.invalidateQueries({ queryKey: ["inventory"] });
-    props.onSaved();
-    props.onClose();
+    setBusy(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.from("warehouses").insert({
+        warehouse_name: name.trim(),
+        is_active: true,
+        api_config: {},
+      });
+
+      if (error) {
+        setHint(error.message || "保存失败，请检查是否已登录及数据库权限。");
+        return;
+      }
+
+      setName("");
+      await qc.invalidateQueries({ queryKey: ["inventory"] });
+      props.onSaved();
+      props.onClose();
+    } catch (e) {
+      setHint(e instanceof Error ? e.message : "网络异常，请稍后重试。");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -79,17 +96,24 @@ function WarehouseModal(props: {
         </div>
         <input
           className="mb-3 w-full rounded border border-[hsl(var(--border))] bg-transparent px-3 py-2 text-sm"
-          placeholder="仓库名称"
+          placeholder="仓库名称（如：领星、海外仓 A）"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e) => {
+            setName(e.target.value);
+            setHint(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void addWh();
+          }}
         />
+        {hint && <p className="mb-2 text-sm text-red-600">{hint}</p>}
         <button
           type="button"
           disabled={busy}
           onClick={() => void addWh()}
-          className="rounded bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black"
+          className="rounded bg-black px-3 py-2 text-sm text-white dark:bg-white dark:text-black disabled:opacity-60"
         >
-          保存
+          {busy ? "保存中…" : "保存"}
         </button>
       </div>
     </div>
@@ -159,7 +183,8 @@ function InventoryUploadModal(props: {
               </select>
             </label>
             <p className="mb-2 text-xs text-muted-foreground">
-              列：SKU、可用库存、在途库存（可选）。日期默认当天。
+              支持系统模板或领星等导出：自动按表头关键字识别 SKU（如 MSKU/FNSKU/Seller
+              SKU）、可用量、在途等列。也兼容固定列「SKU / 可用库存 / 在途库存」。日期默认当天。
             </p>
             <label className="block cursor-pointer rounded border border-dashed border-[hsl(var(--border))] px-3 py-6 text-center text-sm">
               {busy ? "处理中…" : "选择 Excel"}
