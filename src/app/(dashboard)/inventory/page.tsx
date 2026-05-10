@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { formatISO } from "date-fns";
 import * as XLSX from "xlsx";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, isSupabaseBrowserConfigured } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 
 type Warehouse = { id: number; warehouse_name: string; is_active: boolean };
@@ -56,6 +56,12 @@ function WarehouseModal(props: {
 
   async function addWh() {
     setHint(null);
+    if (!isSupabaseBrowserConfigured()) {
+      setHint(
+        "未配置 Supabase 环境变量，无法保存。请在 Vercel Environment Variables 添加 NEXT_PUBLIC_SUPABASE_URL 与 NEXT_PUBLIC_SUPABASE_ANON_KEY 后重新部署。",
+      );
+      return;
+    }
     if (!name.trim()) {
       setHint("请先输入仓库名称。");
       return;
@@ -255,8 +261,28 @@ export default function InventoryPage() {
 
   const warehouses = q.data?.warehouses ?? [];
 
+  const supabaseReady = isSupabaseBrowserConfigured();
+
   return (
     <div className="space-y-4">
+      {!supabaseReady && (
+        <div className="rounded-lg border border-amber-600/50 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-100">
+          <p className="font-medium">当前页面连不上数据库</p>
+          <p className="mt-1">
+            缺少环境变量{" "}
+            <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">
+              NEXT_PUBLIC_SUPABASE_URL
+            </code>{" "}
+            与{" "}
+            <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">
+              NEXT_PUBLIC_SUPABASE_ANON_KEY
+            </code>
+            ，因此无法加载或保存仓库。请在 Vercel（或本地{" "}
+            <code className="rounded bg-amber-100/80 px-1">.env.local</code>
+            ）配置后<strong>重新部署</strong>一次。
+          </p>
+        </div>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">库存</h1>
         <div className="flex flex-wrap gap-2">
