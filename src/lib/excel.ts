@@ -17,10 +17,16 @@ const INV_SKU_HEADER_KEYWORDS = [
   "seller sku",
   "sellersku",
   "seller_sku",
+  "店铺sku",
+  "平台sku",
+  "配对sku",
+  "原sku",
   "子体msku",
   "子体sku",
+  "子asin",
   "msku",
   "fnsku",
+  "asin",
   "本地sku",
   "商品sku",
   "系统sku",
@@ -30,19 +36,27 @@ const INV_SKU_HEADER_KEYWORDS = [
   "料号",
   "存货编码",
 ];
+/** 不用单独「库存」以免命中「总库存」等汇总列；用更具体的词 */
 const INV_AVAIL_HEADER_KEYWORDS = [
   "afn_fulfillable",
   "fulfillable",
   "可用量",
   "可用库存",
   "可售库存",
+  "可发数量",
+  "可发量",
+  "仓内可用",
   "实际可用",
   "良品量",
   "良品",
-  "可用",
+  "可售",
+  "在库",
+  "在库量",
   "实际库存",
   "库存数量",
-  "库存",
+  "fba库存",
+  "本地库存",
+  "海外仓库存",
   "available",
   "quantity on hand",
   "qty",
@@ -125,6 +139,51 @@ function cellToString(v: unknown): string {
   return String(v).trim();
 }
 
+/** 领星等导出：千分位、中文逗号、空格、「120 PCS」类后缀 */
+function parseQuantityCell(v: unknown): number {
+  if (v === null || v === undefined) return NaN;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  let s = String(v)
+    .trim()
+    .replace(/,/g, "")
+    .replace(/，/g, "")
+    .replace(/\s+/g, "");
+  if (!s || s === "-" || s === "--") return NaN;
+  const m = s.match(/^[-+]?\d*\.?\d+/);
+  if (!m) return NaN;
+  const n = Number(m[0]);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function rowToStringCells(row: unknown[] | undefined): string[] {
+  return (row ?? []).map((c) => String(c ?? "").trim());
+}
+
+/** 合并表头常见：左侧有字、右侧空，向右沿用上一格文字 */
+function forwardFillHeaders(headers: string[]): string[] {
+  const out = [...headers];
+  let last = "";
+  for (let i = 0; i < out.length; i++) {
+    if (out[i]) last = out[i];
+    else if (last) out[i] = last;
+  }
+  return out;
+}
+
+/** 双行表头：上下拼接后再做关键字匹配 */
+function combinedHeaderCells(aoa: unknown[][], topRow: number): string[] {
+  const r0 = rowToStringCells(aoa[topRow]);
+  const r1 = topRow + 1 < aoa.length ? rowToStringCells(aoa[topRow + 1]) : [];
+  const len = Math.max(r0.length, r1.length);
+  const out: string[] = [];
+  for (let i = 0; i < len; i++) {
+    const a = r0[i] ?? "";
+    const b = r1[i] ?? "";
+    out.push(`${a} ${b}`.trim());
+  }
+  return out;
+}
+
 function parseExcelDate(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   if (typeof v === "number") {
@@ -161,39 +220,74 @@ export function parseSalesWorkbook(buffer: ArrayBuffer): ParsedSalesRow[] {
   return out;
 }
 
-function parseInventoryFromAoA(aoa: unknown[][]): ParsedInventoryRow[] {
-  if (!aoa.length) return [];
-  const hr = detectInventoryHeaderRowIndex(aoa);
-  const headerRow = (aoa[hr] ?? []).map((c) => String(c ?? "").trim());
-  const skuPick = pickBestColumnIndex(headerRow, INV_SKU_HEADER_KEYWORDS);
-  const avPick = pickBestColumnIndex(headerRow, INV_AVAIL_HEADER_KEYWORDS);
-  const trPick = pickBestColumnIndex(headerRow, INV_TRANSIT_HEADER_KEYWORDS);
+function parseRowsForHeader(
+  aoa: unknown[][],
+  dataStartRow: number,
+  headerCells: string[],
+): ParsedInventoryRow[] {
+  const headers = forwardFillHeaders(headerCells);
+  const skuPick = pickBestColumnIndex(headers, INV_SKU_HEADER_KEYWORDS);
+  const avPick = pickBestColumnIndex(headers, INV_AVAIL_HEADER_KEYWORDS);
+  const trPick = pickBestColumnIndex(headers, INV_TRANSIT_HEADER_KEYWORDS);
+  if (skuPick.index < 0 || avPick.index < 0) return [];
+  if (skuPick.index === avPick.index) return [];
+  if (skuPick.score < 15 || avPick.score < 15) return [];
 
   const out: ParsedInventoryRow[] = [];
-  // 分数阈值略低，兼容表头略写、合并单元格导出等
-  if (skuPick.index >= 0 && avPick.index >= 0 && skuPick.score >= 25 && avPick.score >= 25) {
-    for (let r = hr + 1; r < aoa.length; r++) {
-      const row = aoa[r] ?? [];
-      const sku = cellToString(row[skuPick.index]);
-      if (!sku) continue;
-      const avRaw = row[avPick.index];
-      const available = Number(avRaw);
-      if (!Number.isFinite(available)) continue;
-      let inTransit = 0;
-      if (trPick.index >= 0 && trPick.score >= 25) {
-        const tr = Number(row[trPick.index]);
-        if (Number.isFinite(tr)) inTransit = Math.round(tr);
-      }
-      out.push({
-        sku,
-        available: Math.round(available),
-        inTransit,
-      });
+  for (let r = dataStartRow; r < aoa.length; r++) {
+    const row = aoa[r] ?? [];
+    const sku = cellToString(row[skuPick.index]);
+    if (!sku) continue;
+    const available = parseQuantityCell(row[avPick.index]);
+    if (!Number.isFinite(available)) continue;
+    let inTransit = 0;
+    if (trPick.index >= 0 && trPick.score >= 15 && trPick.index !== avPick.index) {
+      const tr = parseQuantityCell(row[trPick.index]);
+      if (Number.isFinite(tr)) inTransit = Math.round(tr);
     }
-    if (out.length) return out;
+    out.push({
+      sku,
+      available: Math.round(available),
+      inTransit,
+    });
+  }
+  return out;
+}
+
+/** 多行表头 / 合并单元格 / 领星 ProductInventory：多候选表头行取解析行数最多者 */
+function parseInventoryFromAoA(aoa: unknown[][]): ParsedInventoryRow[] {
+  if (!aoa.length) return [];
+  let best: ParsedInventoryRow[] = [];
+  const maxHr = Math.min(55, aoa.length);
+
+  for (let hr = 0; hr < maxHr; hr++) {
+    const rawRow = rowToStringCells(aoa[hr]);
+    if (!rawRow.some(Boolean)) continue;
+
+    const variants: { headers: string[]; dataStart: number }[] = [
+      { headers: rawRow, dataStart: hr + 1 },
+      { headers: forwardFillHeaders(rawRow), dataStart: hr + 1 },
+    ];
+    if (hr + 1 < aoa.length) {
+      const comb = combinedHeaderCells(aoa, hr);
+      if (comb.some(Boolean)) {
+        variants.push({ headers: comb, dataStart: hr + 2 });
+        variants.push({ headers: forwardFillHeaders(comb), dataStart: hr + 2 });
+      }
+    }
+
+    for (const v of variants) {
+      if (!v.headers.some(Boolean)) continue;
+      const rows = parseRowsForHeader(aoa, v.dataStart, v.headers);
+      if (rows.length > best.length) best = rows;
+    }
   }
 
-  return [];
+  if (best.length) return best;
+
+  const hr = detectInventoryHeaderRowIndex(aoa);
+  const fallback = forwardFillHeaders(rowToStringCells(aoa[hr]));
+  return parseRowsForHeader(aoa, hr + 1, fallback);
 }
 
 /** 兼容「首行即表头 + 固定列名」的旧模板 */
@@ -234,7 +328,7 @@ export function parseInventoryWorkbook(buffer: ArrayBuffer): ParsedInventoryRow[
     const aoa = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
       header: 1,
       defval: "",
-      raw: false,
+      raw: true,
     }) as unknown[][];
     const fromAoA = parseInventoryFromAoA(aoa);
     if (fromAoA.length) return fromAoA;

@@ -37,7 +37,13 @@ export async function POST(request: Request) {
   }
 
   if (rows.length === 0) {
-    return NextResponse.json({ error: "没有有效数据行" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          "没有有效数据行：未识别到同时含「SKU/MSKU 等」与「可用量/可发数量」的列。请确认首行或前两行为表头，或导出为未合并单元格的明细表后重试。",
+      },
+      { status: 400 },
+    );
   }
 
   const skuRows = [...new Set(rows.map((r) => r.sku))].map((sku_code) => ({
