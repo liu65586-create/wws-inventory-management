@@ -32,7 +32,8 @@ ChartJS.register(
   Filler,
 );
 
-type HistPoint = { date: string } & Record<string, number>;
+/** `date` 为横轴；其余键为 SKU 代码 → 销量（number） */
+export type HistPoint = { date: string; [sku: string]: string | number };
 
 export function SalesOverviewCharts(props: {
   pieLabels: string[];

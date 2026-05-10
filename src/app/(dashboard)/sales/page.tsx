@@ -6,6 +6,7 @@ import { formatISO } from "date-fns";
 import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/client";
 import { SalesUploadModal } from "@/components/sales/SalesUploadModal";
+import type { HistPoint } from "@/components/sales/SalesOverviewCharts";
 import {
   SalesTable,
   buildMonthSeries,
@@ -55,7 +56,7 @@ async function loadSalesData() {
 
   const dates = [...new Set((hist ?? []).map((h) => String(h.sale_date)))].sort();
   const historyPoints = dates.map((date) => {
-    const point: { date: string } & Record<string, number> = { date };
+    const point: HistPoint = { date };
     for (const sku of skuList) {
       point[sku] = bySkuDate.get(sku)?.get(date) ?? 0;
     }
