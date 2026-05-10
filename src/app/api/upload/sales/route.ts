@@ -25,7 +25,13 @@ export async function POST(request: Request) {
   }
 
   if (rows.length === 0) {
-    return NextResponse.json({ error: "没有有效数据行" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error:
+          "没有有效数据行：未识别到 SKU 列（如 SKU货号/SKU码）与日期列（如 订单创建时间）。也支持固定列「SKU、销售日期、销量」。订单明细无「销量」列时按每行 1 件汇总到当天。",
+      },
+      { status: 400 },
+    );
   }
 
   const skuCodes = [...new Set(rows.map((r) => r.sku))];

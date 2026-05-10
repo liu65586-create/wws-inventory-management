@@ -261,11 +261,103 @@ function parseExcelDate(v: unknown): string | null {
   return new Date(t).toISOString().slice(0, 10);
 }
 
-export function parseSalesWorkbook(buffer: ArrayBuffer): ParsedSalesRow[] {
-  const wb = XLSX.read(buffer, { type: "array" });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
+function collectSheetJsonKeys(rows: Record<string, unknown>[]): string[] {
+  const s = new Set<string>();
+  for (const row of rows.slice(0, 120)) {
+    for (const k of Object.keys(row)) {
+      if (k.startsWith("__EMPTY")) continue;
+      s.add(k);
+    }
+  }
+  return [...s];
+}
+
+/** Temu/领星订单明细等：优先「SKU货号」，其次 SKU码；日期用「订单创建时间」等 */
+const SALES_SKU_HEADER_KEYWORDS = [
+  "sku货号",
+  "seller sku",
+  "sellersku",
+  "sku编码",
+  "sku码",
+  "msku",
+  "fnsku",
+  "skuid",
+  "sku",
+  "款号",
+  "存货编码",
+];
+const SALES_DATE_HEADER_KEYWORDS = [
+  "订单创建时间",
+  "下单时间",
+  "创建时间",
+  "订单日期",
+  "销售日期",
+  "支付时间",
+  "付款时间",
+  "成交时间",
+  "sale date",
+  "order date",
+  "date",
+];
+const SALES_QTY_HEADER_KEYWORDS = [
+  "销量",
+  "销售数量",
+  "购买数量",
+  "商品数量",
+  "数量",
+  "件数",
+  "quantity",
+  "qty",
+];
+
+function allowSalesSkuHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  if (
+    /订单号|子订单|orderno|商品名称|productname|商品属性|spuid|站点|状态|时间|日期|数量|销量|金额|地址|电话|邮编|备注/.test(
+      h,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function allowSalesDateHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  if (/预计送达|实际签收|仓库发货|仓库就绪|发货时间|送达时间|签收时间|就绪时间/.test(h)) return false;
+  if (/商品名称|sku|spu|订单号|子订单|属性|站点|数量|销量/.test(h) && !/时间|日期/.test(h)) return false;
+  return /时间|日期|time|date/.test(h) || headerMatchScore(raw, SALES_DATE_HEADER_KEYWORDS) >= 40;
+}
+
+function allowSalesQtyHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  if (/订单号|子订单|时间|日期|名称|属性|站点|状态|sku|spu|金额|地址/.test(h)) return false;
+  return true;
+}
+
+function aggregateSalesBySkuDate(rows: ParsedSalesRow[]): ParsedSalesRow[] {
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    const key = `${r.sku}\u0000${r.saleDate}`;
+    m.set(key, (m.get(key) ?? 0) + r.quantity);
+  }
+  return [...m.entries()].map(([k, quantity]) => {
+    const i = k.indexOf("\u0000");
+    return {
+      sku: k.slice(0, i),
+      saleDate: k.slice(i + 1),
+      quantity: Math.round(quantity),
+    };
+  });
+}
+
+function parseSalesLegacyJson(sheet: import("xlsx").WorkSheet): ParsedSalesRow[] {
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
     defval: "",
+    raw: true,
   });
   const out: ParsedSalesRow[] = [];
   for (const row of rows) {
@@ -280,6 +372,82 @@ export function parseSalesWorkbook(buffer: ArrayBuffer): ParsedSalesRow[] {
     out.push({ sku, saleDate, quantity: Math.round(quantity) });
   }
   return out;
+}
+
+function parseSalesObjectRows(sheet: import("xlsx").WorkSheet): ParsedSalesRow[] {
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    defval: "",
+    raw: true,
+  });
+  if (!rows.length) return [];
+
+  const keys = collectSheetJsonKeys(rows);
+  let bestSkuKey: string | null = null;
+  let bestSkuScore = 0;
+  let bestDateKey: string | null = null;
+  let bestDateScore = 0;
+  let bestQtyKey: string | null = null;
+  let bestQtyScore = 0;
+
+  for (const key of keys) {
+    const sk = headerMatchScore(key, SALES_SKU_HEADER_KEYWORDS);
+    if (allowSalesSkuHeader(key) && sk > bestSkuScore) {
+      bestSkuScore = sk;
+      bestSkuKey = key;
+    }
+    const dt = headerMatchScore(key, SALES_DATE_HEADER_KEYWORDS);
+    if (allowSalesDateHeader(key) && dt > bestDateScore) {
+      bestDateScore = dt;
+      bestDateKey = key;
+    }
+    const q = headerMatchScore(key, SALES_QTY_HEADER_KEYWORDS);
+    if (allowSalesQtyHeader(key) && q > bestQtyScore) {
+      bestQtyScore = q;
+      bestQtyKey = key;
+    }
+  }
+
+  if (!bestSkuKey || !bestDateKey || bestSkuScore < 15 || bestDateScore < 15) return [];
+  if (bestSkuKey === bestDateKey) return [];
+
+  const statusKey = keys.find(
+    (k) =>
+      normHeader(k).includes("订单状态") ||
+      normHeader(k).includes("orderstatus") ||
+      normHeader(k) === "状态",
+  );
+
+  const out: ParsedSalesRow[] = [];
+  for (const row of rows) {
+    if (statusKey) {
+      const st = cellToString(row[statusKey]);
+      if (/已取消|已关闭|取消|关闭|refund|cancel/i.test(st)) continue;
+    }
+    const sku = cellToString(row[bestSkuKey]);
+    if (!sku || sku === "—" || sku === "-") continue;
+    const saleDate = parseExcelDate(row[bestDateKey]);
+    if (!saleDate) continue;
+    let quantity = 1;
+    if (bestQtyKey && bestQtyKey !== bestSkuKey && bestQtyKey !== bestDateKey && bestQtyScore >= 15) {
+      const q = parseQuantityCell(row[bestQtyKey]);
+      if (Number.isFinite(q) && q > 0) quantity = Math.round(q);
+    }
+    out.push({ sku, saleDate, quantity });
+  }
+  return out;
+}
+
+export function parseSalesWorkbook(buffer: ArrayBuffer): ParsedSalesRow[] {
+  const wb = XLSX.read(buffer, { type: "array" });
+  for (const name of wb.SheetNames) {
+    const sheet = wb.Sheets[name];
+    if (!sheet) continue;
+    const fromObj = parseSalesObjectRows(sheet);
+    if (fromObj.length) return aggregateSalesBySkuDate(fromObj);
+    const legacy = parseSalesLegacyJson(sheet);
+    if (legacy.length) return aggregateSalesBySkuDate(legacy);
+  }
+  return [];
 }
 
 function parseRowsForHeader(
@@ -374,17 +542,6 @@ function parseInventoryLegacyJson(sheet: import("xlsx").WorkSheet): ParsedInvent
     });
   }
   return out;
-}
-
-function collectSheetJsonKeys(rows: Record<string, unknown>[]): string[] {
-  const s = new Set<string>();
-  for (const row of rows.slice(0, 120)) {
-    for (const k of Object.keys(row)) {
-      if (k.startsWith("__EMPTY")) continue;
-      s.add(k);
-    }
-  }
-  return [...s];
 }
 
 /**

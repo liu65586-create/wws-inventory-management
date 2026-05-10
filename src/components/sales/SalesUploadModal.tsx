@@ -49,7 +49,9 @@ export function SalesUploadModal(props: { onDone: () => void }) {
               </button>
             </div>
             <p className="mb-3 text-sm text-muted-foreground">
-              列顺序：SKU、销售日期（YYYY-MM-DD）、销量。支持表头为 SKU / 销售日期 / 销量。
+              支持固定三列：SKU、销售日期、销量。也支持 Temu/领星<strong>订单明细</strong>导出：自动识别「SKU货号 / SKU
+              码」、日期（如「订单创建时间」）；无销量列时按每行 1 件计入当天，同一 SKU
+              同一天会自动合并数量。
             </p>
             <label className="block cursor-pointer rounded border border-dashed border-[hsl(var(--border))] px-3 py-6 text-center text-sm">
               {busy ? "处理中…" : "选择 Excel 文件"}
