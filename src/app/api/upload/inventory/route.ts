@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         error:
-          "没有有效数据行：未识别到同时含「SKU/MSKU 等」与「可用量/可发数量」的列。请确认首行或前两行为表头，或导出为未合并单元格的明细表后重试。",
+          "没有有效数据行：未识别到 SKU 列与可用库存（或总库存）列。请确认第一行为表头；若已部署最新代码仍失败，请导出未合并表头的明细表或联系支持附带表头截图。",
       },
       { status: 400 },
     );

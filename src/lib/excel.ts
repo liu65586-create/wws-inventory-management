@@ -376,6 +376,82 @@ function parseInventoryLegacyJson(sheet: import("xlsx").WorkSheet): ParsedInvent
   return out;
 }
 
+function collectSheetJsonKeys(rows: Record<string, unknown>[]): string[] {
+  const s = new Set<string>();
+  for (const row of rows.slice(0, 120)) {
+    for (const k of Object.keys(row)) {
+      if (k.startsWith("__EMPTY")) continue;
+      s.add(k);
+    }
+  }
+  return [...s];
+}
+
+/**
+ * 领星等导出：首行即表头且列名为完整双语字符串时，`sheet_to_json` 最稳。
+ * AoA 在合并单元格/稀疏列时易丢列，本路径用对象键 + 同一套关键字与过滤。
+ */
+function parseInventoryObjectRows(sheet: import("xlsx").WorkSheet): ParsedInventoryRow[] {
+  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+    defval: "",
+    raw: true,
+  });
+  if (!rows.length) return [];
+
+  const keys = collectSheetJsonKeys(rows);
+  let bestSkuKey: string | null = null;
+  let bestSkuScore = 0;
+  let bestAvailKey: string | null = null;
+  let bestAvailScore = 0;
+  let bestTransitKey: string | null = null;
+  let bestTransitScore = 0;
+
+  for (const key of keys) {
+    const sk = headerMatchScore(key, INV_SKU_HEADER_KEYWORDS);
+    if (allowInventorySkuHeader(key) && sk > bestSkuScore) {
+      bestSkuScore = sk;
+      bestSkuKey = key;
+    }
+    const av = headerMatchScore(key, INV_AVAIL_HEADER_KEYWORDS);
+    if (allowInventoryAvailHeader(key) && av > bestAvailScore) {
+      bestAvailScore = av;
+      bestAvailKey = key;
+    }
+    const tr = headerMatchScore(key, INV_TRANSIT_HEADER_KEYWORDS);
+    if (allowInventoryTransitHeader(key) && tr > bestTransitScore) {
+      bestTransitScore = tr;
+      bestTransitKey = key;
+    }
+  }
+
+  if (!bestSkuKey || !bestAvailKey || bestSkuScore < 15 || bestAvailScore < 15) return [];
+  if (bestSkuKey === bestAvailKey) return [];
+
+  const out: ParsedInventoryRow[] = [];
+  for (const row of rows) {
+    const sku = cellToString(row[bestSkuKey]);
+    if (!sku) continue;
+    const available = parseQuantityCell(row[bestAvailKey]);
+    if (!Number.isFinite(available)) continue;
+    let inTransit = 0;
+    if (
+      bestTransitKey &&
+      bestTransitKey !== bestAvailKey &&
+      bestTransitKey !== bestSkuKey &&
+      bestTransitScore >= 15
+    ) {
+      const t = parseQuantityCell(row[bestTransitKey]);
+      if (Number.isFinite(t)) inTransit = Math.round(t);
+    }
+    out.push({
+      sku,
+      available: Math.round(available),
+      inTransit,
+    });
+  }
+  return out;
+}
+
 export function parseInventoryWorkbook(buffer: ArrayBuffer): ParsedInventoryRow[] {
   const wb = XLSX.read(buffer, { type: "array" });
   const names = wb.SheetNames;
@@ -396,6 +472,8 @@ export function parseInventoryWorkbook(buffer: ArrayBuffer): ParsedInventoryRow[
     if (fromAoA.length) return fromAoA;
     const legacy = parseInventoryLegacyJson(sheet);
     if (legacy.length) return legacy;
+    const fromObjects = parseInventoryObjectRows(sheet);
+    if (fromObjects.length) return fromObjects;
   }
   return [];
 }
