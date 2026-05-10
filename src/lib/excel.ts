@@ -31,6 +31,14 @@ const INV_SKU_HEADER_KEYWORDS = [
   "商品sku",
   "系统sku",
   "sku编码",
+  /** 领星 / WMS ProductInventory：Barcode 列常与 SKU 相同，可作编码列 */
+  "产品条形码",
+  "产品条码",
+  "外部条形码",
+  "外部条码",
+  "其它条码",
+  "其他条码",
+  "barcode",
   "sku",
   "款号",
   "料号",
@@ -67,6 +75,7 @@ const INV_AVAIL_HEADER_KEYWORDS = [
   "fba库存",
   "本地库存",
   "海外仓库存",
+  "availableinventory",
   "availableqty",
   "available",
   "quantity on hand",
@@ -79,18 +88,57 @@ const INV_TRANSIT_HEADER_KEYWORDS = [
   "计划入库",
   "待到货",
   "在途量",
+  "transit",
   "在途",
   "inbound",
   "in_transit",
   "on the way",
 ];
 
+/** 英中双语表头如 `Total Stock/总库存`：去掉 / 再比较 */
 function normHeader(s: string): string {
   return String(s ?? "")
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "")
+    .replace(/[/\\：:]/g, "")
     .replace(/[_-]/g, "");
+}
+
+function allowInventorySkuHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  if (
+    /产品名称|productname|仓库|warehouse|库存属性|stockproperty|总库存|totalstock|可用库存|available|锁定|locked|在途|transit|length|width|height|weight|长度|宽度|高度|重量|单位|unit$|gms|wms/.test(
+      h,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function allowInventoryAvailHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  if ((/gms|wms/.test(h) || /length|width|height|weight|长度|宽度|高度|重量/.test(h)) && !/stock|库存|可用|可售|qty/.test(h)) {
+    return false;
+  }
+  if (/产品名称|productname|库存属性|stockproperty/.test(h)) return false;
+  if (/^warehouse|仓库$|^仓库[^可]/.test(h) || /^warehouse/.test(h)) return false;
+  if (/locked|锁定/.test(h)) return false;
+  if ((/barcode|条码/.test(h) || /其它条码|其他条码|外部条码/.test(h)) && !/sku/.test(h)) {
+    return false;
+  }
+  if (/^unit$|^单位$|尺寸单位|重量单位/.test(h)) return false;
+  return true;
+}
+
+/** 仅把明显为「在途」类的列纳入候选，避免尺寸/重量列误匹配 */
+function allowInventoryTransitHeader(raw: string): boolean {
+  const h = normHeader(raw);
+  if (!h) return false;
+  return /transit|在途|inbound|计划入库|待到货|调拨|采购|标发/.test(h);
 }
 
 function headerMatchScore(header: string, keywords: string[]): number {
@@ -109,11 +157,14 @@ function headerMatchScore(header: string, keywords: string[]): number {
 function pickBestColumnIndex(
   headers: string[],
   keywords: string[],
+  allowRaw?: (raw: string) => boolean,
 ): { index: number; score: number } {
   let bestIdx = -1;
   let bestScore = 0;
   for (let i = 0; i < headers.length; i++) {
-    const sc = headerMatchScore(headers[i] ?? "", keywords);
+    const raw = headers[i] ?? "";
+    if (allowRaw && !allowRaw(raw)) continue;
+    const sc = headerMatchScore(raw, keywords);
     if (sc > bestScore) {
       bestScore = sc;
       bestIdx = i;
@@ -237,9 +288,9 @@ function parseRowsForHeader(
   headerCells: string[],
 ): ParsedInventoryRow[] {
   const headers = forwardFillHeaders(headerCells);
-  const skuPick = pickBestColumnIndex(headers, INV_SKU_HEADER_KEYWORDS);
-  const avPick = pickBestColumnIndex(headers, INV_AVAIL_HEADER_KEYWORDS);
-  const trPick = pickBestColumnIndex(headers, INV_TRANSIT_HEADER_KEYWORDS);
+  const skuPick = pickBestColumnIndex(headers, INV_SKU_HEADER_KEYWORDS, allowInventorySkuHeader);
+  const avPick = pickBestColumnIndex(headers, INV_AVAIL_HEADER_KEYWORDS, allowInventoryAvailHeader);
+  const trPick = pickBestColumnIndex(headers, INV_TRANSIT_HEADER_KEYWORDS, allowInventoryTransitHeader);
   if (skuPick.index < 0 || avPick.index < 0) return [];
   if (skuPick.index === avPick.index) return [];
   if (skuPick.score < 15 || avPick.score < 15) return [];
