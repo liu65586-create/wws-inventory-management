@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -57,7 +58,7 @@ function LinkSpark({ rows }: { rows: { sale_date: string; daily_sales: number }[
   );
 }
 
-export default function CompetitorResultsPage() {
+function CompetitorResultsContent() {
   const sp = useSearchParams();
   const sku = sp.get("sku") ?? "";
   const q = useQuery({
@@ -109,5 +110,13 @@ export default function CompetitorResultsPage() {
         </table>
       </div>
     </div>
+  );
+}
+
+export default function CompetitorResultsPage() {
+  return (
+    <Suspense fallback={<p className="text-sm text-muted-foreground">加载中…</p>}>
+      <CompetitorResultsContent />
+    </Suspense>
   );
 }
