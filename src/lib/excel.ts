@@ -205,7 +205,7 @@ function cellToString(v: unknown): string {
 function parseQuantityCell(v: unknown): number {
   if (v === null || v === undefined) return NaN;
   if (typeof v === "number" && Number.isFinite(v)) return v;
-  let s = String(v)
+  const s = String(v)
     .trim()
     .replace(/,/g, "")
     .replace(/，/g, "")
