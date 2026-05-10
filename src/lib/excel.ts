@@ -36,13 +36,23 @@ const INV_SKU_HEADER_KEYWORDS = [
   "料号",
   "存货编码",
 ];
-/** 不用单独「库存」以免命中「总库存」等汇总列；用更具体的词 */
+/**
+ * 可用量列（导入为「可售库存」数量）。
+ * 含领星 ProductInventory：`Total Stock/总库存`、部分可见的 Available 列等。
+ * 刻意不包含单独「库存」二字，避免误命中「库存属性」等描述列。
+ */
 const INV_AVAIL_HEADER_KEYWORDS = [
   "afn_fulfillable",
   "fulfillable",
+  "totalstock",
+  "总库存",
+  "库存总量",
+  "库存合计",
+  "实际总量",
   "可用量",
   "可用库存",
   "可售库存",
+  "可售量",
   "可发数量",
   "可发量",
   "仓内可用",
@@ -57,6 +67,7 @@ const INV_AVAIL_HEADER_KEYWORDS = [
   "fba库存",
   "本地库存",
   "海外仓库存",
+  "availableqty",
   "available",
   "quantity on hand",
   "qty",
